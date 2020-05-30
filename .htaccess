@@ -1,0 +1,10 @@
+RewriteEngine on                                   
+
+RewriteRule !\.(js|ico|gif|jpg|png|css|html|htm|xml|txt|dat|pdf|json|php|jar|zip|ttf|woff|woff2)$ index.php [NC,L] 
+
+# PHP settings
+php_flag magic_quotes_gpc off
+php_flag register_globals off
+php_flag short_open_tag on
+php_value date.timezone Europe/Berlin
+
