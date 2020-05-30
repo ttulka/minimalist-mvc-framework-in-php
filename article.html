@@ -1,0 +1,326 @@
+<p>Frameworks are good stuff, at least for middle to big enterprise applications. One doesn’t want to reinvent the wheel. Aspects like security, caching, monitoring are hard and it’s easy to get them wrong if implemented from scratch.</p>
+
+<p>On the other hand, there are valid use cases where you probably don’t need all this advanced stuff. Examples can be a personal webpage, blog, product catalog etc.</p>
+
+<p>For a lot of simple cases a static web generator is the right way to go, but you do want something interactive on your web like search, form or comments, a static page is just not enough, but a framework could be a bit overkill.</p>
+
+<p>Let’s give it a try! We will build a minimalist MVC framework from scratch. The requirement: <strong>clean MVC architecture, declarative routing, extreme simplicity</strong>. Can we push it under 16KB? Challenge accepted!</p>
+
+<h2>Routing</h2>
+
+<p>Routing should be as lucid and declarative as possible. Potentially, we can have a lot of routes and if we had to write too much code the routing would easily become a mess.</p>
+
+<p>All requests must go through a singleton Dispatcher. The instance of the Dispatcher is created in the application bootstrap (<code>index.php</code>) together with the routing.</p>
+
+<p>The dispatcher uses internally a singleton object Router:</p>
+
+<pre><code>
+// mvc/Dispatcher.php
+
+class Router {
+    // 'METHOD path' => action
+    private $routing = [];
+}
+</code></pre>
+
+<p>The Router holds the routing rules as an array with paths as keys and actions as values. Actions are functions to be executed when the request matches the path.</p>
+
+<p>HTTP method is optional, <code>GET</code> will be used as default.</p>
+
+<p>For dynamically generated pages we need to parse path parameters as well. We can define a parameter in the path string inside curly brackets. The action must then be called with an associative array of the parameter names and values.</p>
+
+<p>Here are some examples of routing rules:</p>
+<pre>
+[
+  &apos;/&apos; =&gt; function() { ...},
+  &apos;POST /abc&apos;=&gt; function() { ... },
+  &apos;/abc&apos;=&gt; function() { &mldr; },
+  &apos;/abc/{id}&apos;=&gt; function($params) { &mldr; },
+  &apos;GET /abc/{id}/xyz&apos;=&gt; function($params) { &mldr; },
+  &apos;/abc/{id1}/xyz/{id2}&apos;=&gt; function($params) { &mldr; }
+]
+</pre>
+
+<p>Looks pretty neat, easy to create, easy to read. All what we want.</p>
+
+<p>In the Router API we need a function for adding a route and a function to actually process the route upon a request. The former should be easy:</p>
+
+<pre><code>
+// mvc/Dispatcher.php
+
+class Router {
+  private $routing = [];
+
+  function addRouting($pattern, $action) {
+    $this-&gt;routing[$pattern] = $action;
+  } 
+}
+</code></pre>
+
+<p>The latter forms the main functionality of the Router. We iterate through the routes until one doesn’t match the request. Otherwise, we return HTTP code <code>404</code> and execute, let’s say, the root route (<code>/</code>):</p>
+
+<pre><code>
+// mvc/Dispatcher.php
+
+class Router {
+  private $routing = [];
+
+  function addRouting($pattern, $action) { &mldr; } 
+
+  function route($method, $path, $params) {
+    $path = &quot;{$method} /{$path}&quot;;
+
+    foreach ($this-&gt;routing as $pattern =&gt; $handler) {
+      // route parameters as regex
+      $patternParams = $this-&gt;patternParams($pattern);
+      if (!empty($patternParams)) {
+        $pattern = $this-&gt;withParams($pattern);
+      }
+      // add GET into the pattern if necessary
+      $pattern = $this-&gt;withMethod($pattern);
+
+      // if the request matches, $params array is filled
+      if ($this-&gt;requestMatches(
+          $pattern, $path, $patternParams, $params)) {
+        $handler($params);    // execute action
+        return;
+        }
+      }
+
+      http_response_code(404);
+      $this-&gt;route[&apos;/&apos;]([]);
+    }
+}
+</code></pre>
+
+<p>Private functions <code>patternParams</code>, <code>withParams</code>, <code>withMethod</code> and <code>requestMatches</code> are straightforward and uninteresting (the full source code is provided in the link below) - the idea is clear.</p>
+
+<p>Now, we can use the Router in the implementation of our Dispatcher. The Dispatcher doesn’t do much more than that it parses the request and delegate it to the Router:</p>
+
+<pre><code>
+// mvc/Dispatcher.php
+
+class Dispatcher {
+  private $router;
+
+  function __construct() {
+    $this-&gt;router = new Router();
+  }
+
+  function dispatch() {
+    $this-&gt;router-&gt;route(
+      $_SERVER[&apos;REQUEST_METHOD&apos;],
+      $_SERVER[&apos;REQUEST_URI&apos;],
+      $_REQUEST);
+  }
+}
+</code></pre>
+
+<p>As we probably don’t want to access the Router directly, we need to expose a delegating function for adding a route:</p>
+
+<pre><code>
+// mvc/Dispatcher.php
+
+class Dispatcher {
+  private $router;
+
+  function __construct() { &mldr; }
+
+  function dispatch() { &mldr; }
+
+  function routing($pattern, $action) {
+    $this-&gt;router-&gt;addRouting($pattern, $action);
+    return $this;
+  }
+}
+</code></pre>
+
+<p>Alright, the routing and dispatching is ready. Let’s give it a try:</p>
+
+<pre><code>
+// index.php
+
+(new Dispatcher())
+  -&gt;routing(&apos;/hello/{user}&apos;, function($params) {
+    echo &quot;Hello, {$params[&apos;user&apos;]}!&quot;;
+  })
+  -&gt;dispatch();
+</code></pre>
+<pre>
+curl http://localhost:8080/hello/user123
+Hello, user123!
+</pre>
+
+<p>It works! Now, we will implement the MVC pattern.</p>
+
+<h2>View and Model</h2>
+
+<p>The very first idea behind PHP was to have a simple language for templating. Nowadays, PHP is used for almost everything, but templating. Until now: we will create a simple HTML template in PHP, just like this:</p>
+
+<pre><code>
+// views/layouts/html.php
+
+&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+&lt;head&gt;
+  &lt;title&gt;Minimalist MVC Framework&lt;/title&gt;
+  &lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;main&gt;
+    &lt;?= $this-&gt;content() ?&gt;
+  &lt;/main&gt;
+  &lt;footer&gt;
+    &amp;copy; &lt;?= date(&apos;Y&apos;) ?&gt; by PHP
+  &lt;/footer&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</code></pre>
+
+<p>Similarly, we can think of another template, such as XML:</p>
+
+<pre><code>
+// views/layouts/xml.php
+
+&lt;?php
+echo &quot;&lt;?xml version=\&quot;1.0\&quot; encoding=\&quot;utf-8\&quot;?&gt;&quot;;
+echo $this-&gt;content();
+</code></pre>
+
+<p>Simple enough, nah?</p>
+
+<p>That was the layout page, the content of particular views will be rendered into it. A concrete View could look like following:</p>
+
+<pre><code>
+// views/hello.php
+
+&lt;h1&gt;Hello, &lt;?= $this-&gt;user ?&gt;!&lt;/h1&gt;
+&lt;p&gt;Make yourself at home.&lt;/p&gt;
+</code></pre>
+
+<p>Each View needs a name, type (<code>html</code>, <code>xml</code>, <code>json</code>,etc) and a Model, where the data to render lives:</p>
+
+<pre><code>
+// mvc/ModelView.php
+
+class ModelView {
+  private $name;
+  private $model;
+  private $type;
+
+  public function __construct($name, $model, $type = &apos;html&apos;) {
+    $this-&gt;name = $name;
+    $this-&gt;model = $model;
+    $this-&gt;type = $type;
+  }
+
+  final function render() {
+    switch ($this-&gt;type) {
+      case &apos;xml&apos;:
+        header(&apos;Content-type: text/xml; charset=UTF-8&apos;);
+        break;
+      case &apos;json&apos;:
+        header(&quot;Content-Type: application/json; charset=UTF-8&quot;);
+        break;
+      default:
+        header(&quot;Content-Type: text/html; charset=UTF-8&quot;);
+    }
+    require_once &quot;./layout/{$this-&gt;type}.php&quot;;
+  }
+
+  final function content() {
+    ob_start();
+    require_once &quot;./views/{$this-&gt;name}.php&quot;;
+    $out = ob_get_contents();
+    ob_end_clean();
+
+    return $out;
+  }
+
+  function __get($key) {
+    return isset($this-&gt;model[$key]) 
+      ? $this-&gt;model[$key] 
+      : &quot;__{$key}__&quot;;
+  }
+}
+</code></pre>
+
+<p>The View is read from a file by the name, model attributes are retrieved by the View code via the getter function. The class <code>ModelView</code> is used by the Controller as we will see next.</p>
+
+<h2>Controller</h2>
+
+<p>The role of a Controller is to validate user input, call the domain logic, fill the View Model and render the View. The Controller is an abstract class meant to be extended by custom actions controllers:</p>
+
+<pre><code>
+// mvc/Controller.php
+
+abstract class Controller {
+  private $model = [];
+
+  function render($name, $type = &apos;html&apos;) {
+    return new ModelView($name, $this-&gt;model, $type);
+  }
+
+  function addModelAttribute($key, $value) {
+    $this-&gt;model[$key] = $value;
+  }
+}
+</code></pre>
+
+<p>A custom controller could look as follows:</p>
+
+<pre><code>
+// controllers/HelloController.php
+
+class HelloController extends Controller {
+
+  function sayHello($params) {
+    $this-&gt;addModelAttribute(&apos;user&apos;, $params[&apos;user&apos;]);
+    $this-&gt;render(&apos;hello&apos;);
+  }
+}
+</code></pre>
+
+<h2>Put It All Together</h2>
+<p>As the last, we have use our <code>HelloController</code> in the routing definition:</p>
+
+<pre><code>
+// index.php
+
+(new Dispatcher())
+  -&gt;routing(&apos;/hello/{user}&apos;, function($params) {
+    (new HelloController())-&gt;sayHello($params);
+  })
+  -&gt;dispatch();
+</code></pre>
+<pre>
+curl http://localhost:8080/hello/user123
+&lt;!doctype html&gt;
+&lt;html lang=&quot;en&quot;&gt;
+&lt;head&gt;
+  &lt;title&gt;Minimalist MVC Framework&lt;/title&gt;
+  &lt;meta charset=&quot;utf-8&quot;&gt;
+&lt;/head&gt;
+&lt;body&gt;
+  &lt;main&gt;
+    &lt;h1&gt;Hello, user123!&lt;/h1&gt;
+    &lt;p&gt;Make yourself at home.&lt;/p&gt;
+  &lt;/main&gt;
+  &lt;footer&gt;
+    &amp;copy; 2020 by PHP
+  &lt;/footer&gt;
+&lt;/body&gt;
+&lt;/html&gt;
+</pre>
+
+<p>We’re done. The final size of the framework source code is 4.1 KB. We did it!</p>
+
+<h2>Conclusion</h2>
+
+<p>We’ve implemented a minimalist super-performant MVC framework using only vanilla PHP. The focus was simplicity, ease of use, separation of concerns.</p> 
+
+<p>In less than 5 KB we have achieved to create a simple request dispatcher with declarative routing and base classes for extending when implementing custom actions. Custom application code, domain logic and the framework are fully separated and being touched only on the boundaries.</p>
+
+<p>The working source code is on <a href="https://github.com/ttulka/minimalist-mvc-framework-in-php">my GitHub</a>.</p>
+
+<p>Thanks for reading!</p>
